@@ -37,35 +37,21 @@ typedef struct {
 typedef struct {
   InterpolationKind kind;
   union {
-    LapseInterpolation lapse;
-    FactorInterpolation factors;
-  }
+    LapseInterpolation *lapse;
+    FactorInterpolation *factors;
+  };
 } Interpolation;
 
-// typedef struct {} Forcing1D;
-// typedef struct {} Forcing2D;
-// typedef struct {} Forcing3D;
-// typedef struct {} ForcingNC;
 typedef struct {
-  Station* stations; 
-  int count;                  // Number of stations in model
-  Station* stations_sub;      // Only stations in subgrid
-  int stations_sub_count;     // Number of stations in subgrid     
-  char  *indicator_filename;
-  Vector *indicator_vector;
-  char  *dem_filename;
-  Vector *dem_vector;
-  int *id_to_index;
-  HBT* iodb;
-  Vector* sw_vect;
-  Vector* lw_vect;
-  Vector* u_vect;
-  Vector* v_vect;
-  Vector* temp_vect;
-  Vector* prcp_vect;
-  Vector* patm_vect;
-  Vector* qatm_vect;
-} ForcingStations;
+  double sw;
+  double lw;
+  double u;
+  double v;
+  double temp;
+  double prcp;
+  double patm;
+  double qatm;
+} MeteoRecord;
 
 typedef struct {
   int id;                     // Indicator id
@@ -82,19 +68,33 @@ typedef struct {
   Interpolation* prcp_interp; // Precipitation interpolation
   Interpolation* patm_interp; //
   Interpolation* qatm_interp; //
-  MeteoRecord current_record;  // Most recent record read 
+  MeteoRecord *current_record;  // Most recent record read 
 } Station;
 
+// typedef struct {} Forcing1D;
+// typedef struct {} Forcing2D;
+// typedef struct {} Forcing3D;
+// typedef struct {} ForcingNC;
 typedef struct {
-  double sw;
-  double lw;
-  double u;
-  double v;
-  double temp;
-  double prcp;
-  double patm;
-  double qatm;
-} MeteoRecord;
+  Station** stations; 
+  int count;                  // Number of stations in model
+  Station** stations_sub;      // Only stations in subgrid
+  int stations_sub_count;     // Number of stations in subgrid     
+  char  *indicator_filename;
+  Vector *indicator_vector;
+  char  *dem_filename;
+  Vector *dem_vector;
+  int *id_to_index;
+  HBT* iodb;
+  Vector* sw_vect;
+  Vector* lw_vect;
+  Vector* u_vect;
+  Vector* v_vect;
+  Vector* temp_vect;
+  Vector* prcp_vect;
+  Vector* patm_vect;
+  Vector* qatm_vect;
+} ForcingStations;
 
 typedef struct {
   int key;
@@ -121,24 +121,13 @@ typedef struct {
 Forcing* ForcingInit(ProblemData *problem_data, Grid *metgrid, const char* name);
 void ForcingStationsInit(Forcing* forcing);
 void MarkStationsInSubgrid(Forcing* forcing);
-Station* StationInit(const char* name);
-Interpolation* InterpolationInit(const char* station_name, const char* param);
+Station* StationInit(char* name);
+Interpolation* InterpolationInit(char* station_name, char* param);
 int ForcingIODBCompare(void *a_obj, void *b_obj);
 Station* IODBGetStation(Forcing* forcing, int id, bool result_required);
 void ReadNextMeteoRecord(Forcing* forcing);
 void OpenStationFiles(Forcing* forcing);
 void ForcingGetCLMInputs(Forcing* forcing, double* sw, double* lw, double* u, double* v, 
   double* temp, double* prcp, double* patm, double* qatm);
-
-/*
-prcp_forc_sub = VectorSubvector(instance_xtra->prcp_forc, is);
-prcp_data = SubvectorData(prcp_forc_sub);
-// Fill SubvectorData's w/ uniform forcinv values
-          for (n = 0; n < ((nx + 2) * (ny + 2) * 3); n++)
-          {
-            sw_data[n] = sw;
-            lw_data[n] = lw;
-            prcp_data[n] = prcp;
-*/
 
 #endif

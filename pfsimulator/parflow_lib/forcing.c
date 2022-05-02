@@ -27,7 +27,7 @@ Forcing* ForcingInit(ProblemData *problem_data, Grid *metgrid, const char* name)
                forcing->forcingstations->indicator_vector);
 
   forcing->forcingstations->iodb = 
-    HBT_new(ForcingIODBCompare, NULL, NULL, NULL, NULL);
+    HBT_new(ForcingIODBCompare, NULL, NULL, NULL, 0);
 
   ForcingStationsInit(forcing);
   OpenStationFiles(forcing);
@@ -52,14 +52,14 @@ void ForcingStationsInit(Forcing* forcing) {
   NameArray station_names_na = NA_NewNameArray(station_names);
   int station_count = NA_Sizeof(station_names_na);
   forcing->forcingstations->count = station_count;
-  forcing->forcingstations->stations = ctalloc(*Station, station_count);
+  forcing->forcingstations->stations = ctalloc(Station*, station_count);
 
   for (int i = 0; i < station_count; i++) {
     char* station_name = station_names_na->names[i];
     forcing->forcingstations->stations[i] = StationInit(station_name);
 
     Forcing_IODB_Entry *db_entry = ctalloc(Forcing_IODB_Entry, 1);
-    db_entry->key = forcing->forcingstations->stations[i].id;
+    db_entry->key = forcing->forcingstations->stations[i]->id;
     db_entry->value = forcing->forcingstations->stations[i];
     HBT_insert(forcing->forcingstations->iodb, db_entry, 0);
   }
@@ -92,7 +92,7 @@ void ForcingStationsInit(Forcing* forcing) {
   InitVectorAll(forcing->forcingstations->qatm_vect, 100.0);
 }
 
-Interpolation* InterpolationInit(const char* station_name, const char* param) {
+Interpolation* InterpolationInit(char* station_name, char* param) {
   char key[IDB_MAX_KEY_LEN];
 
   Interpolation* interp = (Interpolation*) malloc(sizeof(Interpolation));
@@ -106,7 +106,7 @@ Interpolation* InterpolationInit(const char* station_name, const char* param) {
     case INTERPOLATION_NONE:
       break;
     case INTERPOLATION_LAPSE:
-      interp->lapse->rate = ctalloc(LapseInterpolation, 1);
+      interp->lapse = ctalloc(LapseInterpolation, 1);
       sprintf(key, "Solver.CLM.Stations.%s.Interpolation.%s.Lapse", 
       station_name, param);
       interp->lapse->rate = GetDouble(key);
@@ -115,9 +115,9 @@ Interpolation* InterpolationInit(const char* station_name, const char* param) {
       interp->factors = ctalloc(FactorInterpolation, 1);
       sprintf(key, "Solver.CLM.Stations.%s.Interpolation.%s.Factors.File", 
         station_name, param);
-      interp->factors->infile = GetString(key);
-      ReadPFBinary(interp->factors_filename, 
-                   interp->factors_vector);
+      interp->factors->filename = GetString(key);
+      ReadPFBinary(interp->factors->filename, 
+                   interp->factors->factors_vector);
       break;
     default:
       InputError("Error: invalid value <%s> for key <%s>\n",
@@ -128,7 +128,7 @@ Interpolation* InterpolationInit(const char* station_name, const char* param) {
 }
 
 // TODO: modify so only stations in subgrid are allocated
-Station* StationInit(const char* name) {
+Station* StationInit(char* name) {
   char key[IDB_MAX_KEY_LEN];
 
   Station* station = ctalloc(Station, 1);
@@ -143,14 +143,14 @@ Station* StationInit(const char* name) {
   sprintf(key, "Solver.CLM.Stations.%s.File", name);
   station->infile = GetString(key);
 
-  station->sw_interp = InitInterpolation(name, "DSWR");
-  station->lw_interp = InitInterpolation(name, "DLWR");
-  station->prcp_interp = InitInterpolation(name, "APCP");
-  station->temp_interp = InitIntexrpolation(name, "Temp");
-  station->u_interp = InitInterpolation(name, "UGRD");
-  station->v_interp = InitInterpolation(name, "VGRD");
-  station->patm_interp = InitInterpolation(name, "Press");
-  station->qatm_interp = InitInterpolation(name, "SPFH");
+  station->sw_interp = InterpolationInit(name, "DSWR");
+  station->lw_interp = InterpolationInit(name, "DLWR");
+  station->prcp_interp = InterpolationInit(name, "APCP");
+  station->temp_interp = InterpolationInit(name, "Temp");
+  station->u_interp = InterpolationInit(name, "UGRD");
+  station->v_interp = InterpolationInit(name, "VGRD");
+  station->patm_interp = InterpolationInit(name, "Press");
+  station->qatm_interp = InterpolationInit(name, "SPFH");
   station->fp = NULL;
   station->in_subgrid = false;
 
@@ -184,10 +184,8 @@ void MarkStationsInSubgrid(Forcing* forcing) {
     {
       int ips = SubvectorEltIndex(indi_subvector, i, j, 0);
       int indi_index = (int) round(indi_data[ips]);
-      Station* station = IODBGetStation(indi_index);
-      if (station != NULL) {
-        station->in_subgrid = true;
-      }
+      Station* station = IODBGetStation(forcing, indi_index, true);
+      station->in_subgrid = true;
     });
   }
 }
@@ -213,7 +211,7 @@ Station* IODBGetStation(Forcing* forcing, int id, bool result_required) {
   Forcing_IODB_Entry* lookup_entry;
   Forcing_IODB_Entry* result;
 
-  lookup_entry.key = (int) id;
+  lookup_entry->key = (int) id;
 
   result = (Forcing_IODB_Entry*) 
     HBT_lookup(forcing->forcingstations->iodb, &lookup_entry);
@@ -225,8 +223,10 @@ Station* IODBGetStation(Forcing* forcing, int id, bool result_required) {
   else
   {
     if (result_required) {
-      InputError("Error: Unable to find station with index <%d> "
-                "in station indicator file\n", key);
+      char key_str[128];
+      sprintf(key_str, "%d", lookup_entry->key);
+      InputError("Error: Unable to find station with index <%s> "
+                "in station indicator file\n", key_str, "");
     } else {
       return NULL;
     }
@@ -240,20 +240,29 @@ void ReadNextMeteoRecord(Forcing* forcing) {
     if (!station->in_subgrid) {
       continue;
     }
-    MeteoRecord r;
+    MeteoRecord *r = station->current_record;
+    //double c1, c2, c3, c4, c5, c6, c7, c8;
     int scanned = 
-      fscanf("%f%f%f%f%f%f%f%f", 
-      &r.sw, &r.lw, &r.prcp, &r.temp, &r.u, &r.v, &r.patm, &r.qatm);
-    if (scanned != 8) {
-      amps_Printf("Error reading entry from file: %s", station->infile);
-      exit(1);
-    }
-    station->current_record = r;
+      fscanf(station->fp, "%lf%lf%lf%lf%lf%lf%lf%lf", 
+        &(r->sw), &(r->lw), &(r->prcp), &(r->temp), &(r->u), &(r->v), &(r->patm), &(r->qatm));
+      if (scanned != 8) {
+        amps_Printf("Error reading entry from file: %s", station->infile);
+        exit(1);
+      }
+      // r->sw = c1;
+      // r->lw = c2;
+      // r->prcp = c3;
+      // r->temp = c4;
+      // r->u = c5;
+      // r->v = c6;
+      // r->patm = c7;
+      // r->qatm = c8;
+    //station->current_record = r; // TODO: Probably unnecessary. Delete.
   }
 }
 
 void OpenStationFiles(Forcing* forcing) {
-  for (int i = 0; i < forcing->forcingstations->count; i++) {
+  for (int i = 0; i < (forcing->forcingstations->count); i++) {
     Station* station = forcing->forcingstations->stations[i];
     if (!station->in_subgrid) {
       continue;
@@ -263,6 +272,8 @@ void OpenStationFiles(Forcing* forcing) {
       printf("Failed to open input file %s for reading.", station->infile);
       exit(1);
     }
+
+    station->current_record = ctalloc(MeteoRecord, 1);
   }
 }
 
@@ -276,7 +287,6 @@ void ForcingGetCLMInputs(Forcing* forcing, double* sw, double* lw, double* u, do
   ForSubgridI(is, subgrids)
   {
     Subgrid* subgrid = SubgridArraySubgrid(subgrids, is);
-    Subvector* indi_subvector = VectorSubvector(forcing->forcingstations->indicator_vector, is);
 
     int ix = SubgridIX(subgrid);
     int iy = SubgridIY(subgrid);
@@ -288,16 +298,41 @@ void ForcingGetCLMInputs(Forcing* forcing, double* sw, double* lw, double* u, do
 
     int r = SubgridRX(subgrid);
 
+    Subvector* indi_subvector = VectorSubvector(forcing->forcingstations->indicator_vector, is);
+    Subvector* sw_subvector = VectorSubvector(forcing->forcingstations->sw_vect, is);
+    Subvector* lw_subvector = VectorSubvector(forcing->forcingstations->lw_vect, is);
+    Subvector* u_subvector = VectorSubvector(forcing->forcingstations->u_vect, is);
+    Subvector* v_subvector = VectorSubvector(forcing->forcingstations->v_vect, is);
+    Subvector* temp_subvector = VectorSubvector(forcing->forcingstations->temp_vect, is);
+    Subvector* prcp_subvector = VectorSubvector(forcing->forcingstations->prcp_vect, is);
+    Subvector* patm_subvector = VectorSubvector(forcing->forcingstations->patm_vect, is);
+    Subvector* qatm_subvector = VectorSubvector(forcing->forcingstations->qatm_vect, is);
+
     double* indi_data = SubvectorData(indi_subvector);
+    double* sw_data = SubvectorData(sw_subvector);
+    double* lw_data = SubvectorData(lw_subvector);
+    double* u_data = SubvectorData(u_subvector);
+    double* v_data = SubvectorData(v_subvector);
+    double* temp_data = SubvectorData(temp_subvector);
+    double* prcp_data = SubvectorData(prcp_subvector);
+    double* patm_data = SubvectorData(patm_subvector);
+    double* qatm_data = SubvectorData(qatm_subvector);
 
     int i, j, k;
     GrGeomInLoop(i, j, k, gr_domain, r, ix, iy, iz, nx, ny, nz,
     {
       int ips = SubvectorEltIndex(indi_subvector, i, j, 0);
       int indi_index = (int) round(indi_data[ips]);
-      Station* station = IODBGetStation(indi_index);
-      MeteoRecord r = station->current_record;
-      
+      Station* station = IODBGetStation(forcing, indi_index, true);
+      MeteoRecord *r = station->current_record;
+      sw_data[ips] = r->sw; // TODO: is ips correct? Sw other method in solver_richards.c (for (n = 0; n < ((nx + 2) * (ny + 2) * 3); n++))
+      lw_data[ips] = r->lw;
+      u_data[ips] = r->u;
+      v_data[ips] = r->v;
+      temp_data[ips] = r->temp;
+      prcp_data[ips] = r->prcp;
+      patm_data[ips] = r->patm;
+      qatm_data[ips] = r->qatm;
     });
   } 
 
